@@ -58,11 +58,15 @@ def execute_cmd(cmd):
     except Exception:
         return False
 
+# 【修复后的双向拦截代码：分别独立执行进站和出站】
 def add_firewall_rule(ip):
     rule_name = f"{RULE_PREFIX}{ip}"
     cmd_in = f'netsh advfirewall firewall add rule name="{rule_name}" dir=in action=block remoteip={ip}'
     cmd_out = f'netsh advfirewall firewall add rule name="{rule_name}" dir=out action=block remoteip={ip}'
-    return execute_cmd(cmd_in) or execute_cmd(cmd_out)
+    
+    in_success = execute_cmd(cmd_in)
+    out_success = execute_cmd(cmd_out)
+    return in_success and out_success
 
 def remove_firewall_rule(ip):
     rule_name = f"{RULE_PREFIX}{ip}"
