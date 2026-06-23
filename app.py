@@ -58,7 +58,7 @@ def execute_cmd(cmd):
     except Exception:
         return False
 
-# 【修复后的双向拦截代码：分别独立执行进站和出站】
+# 【修复1：确保进站和出站规则各自独立执行，完美拦截 iVMS】
 def add_firewall_rule(ip):
     rule_name = f"{RULE_PREFIX}{ip}"
     cmd_in = f'netsh advfirewall firewall add rule name="{rule_name}" dir=in action=block remoteip={ip}'
@@ -203,8 +203,9 @@ def unblock_api():
     return jsonify({"success": True})
 
 if __name__ == '__main__':
-    # 启动时清理一切历史残留规则，防止产生死规则
-    execute_cmd(f'netsh advfirewall firewall delete rule name=all | findstr "{RULE_PREFIX}"')
+    # 【修复2：使用 PowerShell 精准匹配并清理历史死规则，绝对不会误删系统自带规则】
+    execute_cmd(f'powershell -WindowStyle Hidden -Command "Remove-NetFirewallRule -DisplayName \'{RULE_PREFIX}*\' -ErrorAction SilentlyContinue"')
+    
     sync_firewall()
     
     # 启动文件监视器
