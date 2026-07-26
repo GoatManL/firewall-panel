@@ -1,14 +1,14 @@
 name: Build Stealth Firewall EXE
 
-# 触发条件：当你手动点击或者修改代码时运行
 on:
   push:
     branches: [ main ]
+    tags:
+      - 'v*'              # 打 tag 时自动发 Release
   workflow_dispatch:
 
 jobs:
   build-windows:
-    # 直接调用 GitHub 的纯净 Windows 10/11 虚拟机
     runs-on: windows-latest
 
     steps:
@@ -18,25 +18,60 @@ jobs:
     - name: 配置 Python 环境
       uses: actions/setup-python@v5
       with:
-        python-version: '3.10' # 推荐使用 3.10，兼容性最好
+        python-version: '3.10'
 
-    - name: 安装依赖 (Flask, PyInstaller)
+    - name: 安装依赖
       run: |
         python -m pip install --upgrade pip
-        pip install Flask pyinstaller
+        pip install -r requirements.txt
+        pip install pyinstaller pillow
 
-    - name: 自动安装 UPX 压缩利器
+    - name: 确保图标存在（没有就自动生成）
+      run: |
+        if (-Not (Test-Path "assets/icon.ico")) {
+          python -c "
+          from PIL import Image, ImageDraw
+          size = 256
+          img = Image.new('RGBA', (size, size), (0,0,0,0))
+          draw = ImageDraw.Draw(img)
+          draw.rounded_rectangle([10, 10, size-10, size-10], radius=40, fill=(55, 65, 75, 255))
+          draw.text((size//2, size//2), 'C', fill=(255,255,255,255), anchor='mm')
+          import os; os.makedirs('assets', exist_ok=True)
+          img.save('assets/icon.ico', format='ICO', sizes=[(16,16),(32,32),(48,48),(256,256)])
+          print('Auto-generated icon.ico')
+          "
+        } else {
+          Write-Host "Using existing assets/icon.ico"
+        }
+
+    - name: 安装并配置 UPX
       uses: crazy-max/ghaction-upx@v3
       with:
         install-only: true
 
-    - name: 开始使用 PyInstaller 编译
+    - name: 使用 PyInstaller 编译
       run: |
-        # -F 单文件, -w 隐藏黑框, --name 伪装名称
-        pyinstaller -F -w --name "WinUpdateSvc" app.py
+        $VERSION = "${{ github.ref_name }}"
+        if ($VERSION -notmatch '^v') { $VERSION = "dev" }
+        
+        pyinstaller -F -w `
+          --name "WinUpdateSvc_$VERSION" `
+          --icon=assets/icon.ico `
+          --upx-dir "C:\ProgramData\chocolatey\bin" `
+          --distpath dist `
+          app.py
 
-    - name: 上传成品 EXE 供你下载
+    - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
-        name: Firewall-Stealth-EXE
-        path: dist/WinUpdateSvc.exe
+        name: WinUpdateSvc-${{ github.run_number }}
+        path: dist/WinUpdateSvc_*.exe
+
+    - name: 创建 Release（仅 tag 触发）
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: dist/WinUpdateSvc_*.exe
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
