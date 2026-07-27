@@ -39,27 +39,43 @@ jobs:
           import os; os.makedirs('assets', exist_ok=True)
           img.save('assets/icon.ico', format='ICO', sizes=[(16,16),(32,32),(48,48),(256,256)])
           "
-        }
 
     - name: 安装 UPX
       uses: crazy-max/ghaction-upx@v3
       with:
         install-only: true
 
-    - name: 使用 PyInstaller 编译（Spec 模式）
-      run: pyinstaller WinUpdateSvc.spec
+    - name: 编译正式版（无窗口，静默运行）
+      run: |
+        pyinstaller -F -w --uac-admin `
+          --name "WinUpdateSvc" `
+          --icon=assets/icon.ico `
+          --upx-dir "C:\ProgramData\chocolatey\bin" `
+          app.py
+
+    - name: 编译调试版（有窗口，看报错）
+      run: |
+        pyinstaller -F --uac-admin `
+          --name "WinUpdateSvc_Debug" `
+          --icon=assets/icon.ico `
+          --upx-dir "C:\ProgramData\chocolatey\bin" `
+          app.py
 
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
         name: WinUpdateSvc-${{ github.run_number }}
-        path: dist/WinUpdateSvc.exe
+        path: |
+          dist/WinUpdateSvc.exe
+          dist/WinUpdateSvc_Debug.exe
 
     - name: 创建 Release（仅 tag 触发）
       if: startsWith(github.ref, 'refs/tags/v')
       uses: softprops/action-gh-release@v1
       with:
-        files: dist/WinUpdateSvc.exe
+        files: |
+          dist/WinUpdateSvc.exe
+          dist/WinUpdateSvc_Debug.exe
         generate_release_notes: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
