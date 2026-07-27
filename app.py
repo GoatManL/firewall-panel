@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import os
 import json
 import time
@@ -6,6 +7,7 @@ import subprocess
 import sys
 import winreg
 import ctypes
+import socket
 from functools import wraps
 from flask import Flask, request, jsonify, render_template_string, Response
 
@@ -20,11 +22,10 @@ CONFIG_FILE = os.path.join(application_path, 'config.json')
 app = Flask(__name__)
 
 # --- 全局隐蔽开关 ---
-SILENT_MODE = True  # True = 完全静默，不写任何日志；False = 写临时目录日志
+SILENT_MODE = True
 LOG_FILE = os.path.join(os.environ.get('TEMP', application_path), 'wucore.dat')
 
 def silent_log(msg):
-    """仅在非静默模式下写入日志"""
     if not SILENT_MODE:
         try:
             with open(LOG_FILE, 'a', encoding='utf-8') as f:
@@ -38,7 +39,7 @@ last_mtime = 0
 
 # --- 隐蔽配置 ---
 RULE_PREFIX = "CoreNet-Diag-Block-"
-REG_NAME = "WindowsUpdateCore"  # 注册表自启动项名称（伪装系统组件）
+REG_NAME = "WindowsUpdateCore"
 DEFAULT_CONFIG = {
     "web_port": 51883,
     "admin_user": "admin",
@@ -79,6 +80,15 @@ def get_app_path():
         return sys.executable
     return os.path.abspath(sys.argv[0])
 
+def is_port_available(port):
+    """检测端口是否被占用"""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(('0.0.0.0', port))
+            return True
+    except OSError:
+        return False
+
 def check_firewall_status():
     try:
         startupinfo = subprocess.STARTUPINFO()
@@ -100,7 +110,6 @@ def check_firewall_status():
         return None, f"检测异常: {e}"
 
 def enable_firewall():
-    """静默开启所有防火墙配置文件"""
     try:
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -174,11 +183,10 @@ def is_in_startup():
         return False
 
 def hide_console():
-    """双重保险隐藏控制台窗口"""
     try:
         hwnd = ctypes.windll.kernel32.GetConsoleWindow()
         if hwnd:
-            ctypes.windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE
+            ctypes.windll.user32.ShowWindow(hwnd, 0)
     except Exception:
         pass
 
@@ -197,18 +205,18 @@ def remove_firewall_rule(ip):
 # --- 核心：配置文件热更新与同步引擎 ---
 def sync_firewall():
     global current_blocked_ips
-    config = load_config()
-    target_ips = set(config.get('blocked_ips', []))
-    
-    ips_to_add = target_ips - current_blocked_ips
-    for ip in ips_to_add:
-        add_firewall_rule(ip)
-        
-    ips_to_remove = current_blocked_ips - target_ips
-    for ip in ips_to_remove:
-        remove_firewall_rule(ip)
-        
-    current_blocked_ips = target_ips
+    try:
+        config = load_config()
+        target_ips = set(config.get('blocked_ips', []))
+        ips_to_add = target_ips - current_blocked_ips
+        for ip in ips_to_add:
+            add_firewall_rule(ip)
+        ips_to_remove = current_blocked_ips - target_ips
+        for ip in ips_to_remove:
+            remove_firewall_rule(ip)
+        current_blocked_ips = target_ips
+    except Exception as e:
+        silent_log(f"防火墙同步异常: {e}")
 
 def config_watcher():
     global last_mtime
@@ -298,7 +306,6 @@ def index():
     <body>
         <div class="container">
             <h3>⚙️ 网络诊断与终端隔离控制台</h3>
-            
             <div class="card">
                 <div class="card-header">
                     <span>系统状态</span>
@@ -324,7 +331,6 @@ def index():
                     </div>
                 </div>
             </div>
-            
             <div class="card">
                 <div class="card-body">
                     <form id="addForm" class="d-flex">
@@ -333,7 +339,6 @@ def index():
                     </form>
                 </div>
             </div>
-            
             <div class="card">
                 <div class="card-header">已隔离终端列表</div>
                 <div class="card-body" style="padding:0">
@@ -359,14 +364,11 @@ def index():
                     const fwEl = document.getElementById('fwStatus');
                     fwEl.textContent = data.firewall_message;
                     fwEl.className = (data.firewall_enabled === true ? 'text-success' : (data.firewall_enabled === false ? 'text-danger' : 'text-warning'));
-                    
                     const portEl = document.getElementById('portStatus');
                     portEl.textContent = data.self_port_message;
                     portEl.className = data.self_port_allowed ? 'text-success' : 'text-warning';
-                    
                     const stEl = document.getElementById('startupStatus');
                     stEl.textContent = data.startup_enabled ? '已启用' : '未启用';
-                    
                     const btn = document.getElementById('startupBtn');
                     const action = data.startup_enabled ? 'disable' : 'enable';
                     btn.textContent = data.startup_enabled ? '关闭' : '启用';
@@ -448,32 +450,55 @@ def unblock_api():
     return jsonify({"success": True})
 
 if __name__ == '__main__':
-    # 立即隐藏控制台窗口（双重保险）
-    hide_console()
-    
-    # 清理历史死规则
-    execute_cmd(f'powershell -WindowStyle Hidden -Command "Remove-NetFirewallRule -DisplayName \'{RULE_PREFIX}*\' -ErrorAction SilentlyContinue"')
-    
-    cfg = load_config()
-    port = cfg.get('web_port', 51883)
-    
-    # 静默检查并开启防火墙
-    fw_ok_before, _ = check_firewall_status()
-    if not fw_ok_before:
-        enable_firewall()
-    
-    # 静默放行自身端口
-    ensure_self_port_allowed(port)
-    
-    sync_firewall()
-    
-    # 启动文件监视器
-    threading.Thread(target=config_watcher, daemon=True).start()
-    
-    # 彻底关闭 Flask 日志输出
-    import logging
-    log = logging.getLogger('werkzeug')
-    log.setLevel(logging.ERROR)
-    log.disabled = True
-    
-    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+    try:
+        hide_console()
+        
+        # 清理历史死规则（忽略失败）
+        try:
+            execute_cmd(f'powershell -WindowStyle Hidden -Command "Remove-NetFirewallRule -DisplayName \'{RULE_PREFIX}*\' -ErrorAction SilentlyContinue"')
+        except Exception:
+            pass
+        
+        cfg = load_config()
+        port = cfg.get('web_port', 51883)
+        
+        # 防火墙相关（失败不阻断）
+        try:
+            fw_ok_before, _ = check_firewall_status()
+            if not fw_ok_before:
+                enable_firewall()
+        except Exception:
+            pass
+        
+        try:
+            ensure_self_port_allowed(port)
+        except Exception:
+            pass
+        
+        try:
+            sync_firewall()
+        except Exception:
+            pass
+        
+        threading.Thread(target=config_watcher, daemon=True).start()
+        
+        import logging
+        log = logging.getLogger('werkzeug')
+        log.setLevel(logging.ERROR)
+        log.disabled = True
+        
+        # 检测端口，如果被占用则尝试 +1
+        actual_port = port
+        if not is_port_available(port):
+            actual_port = port + 1
+            if not is_port_available(actual_port):
+                actual_port = port + 2
+        
+        # 静默启动服务
+        try:
+            app.run(host='0.0.0.0', port=actual_port, debug=False, use_reloader=False)
+        except Exception as e:
+            silent_log(f"服务启动失败: {e}")
+            
+    except Exception as e:
+        silent_log(f"程序致命错误: {e}")
