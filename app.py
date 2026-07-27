@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import os
 import json
 import time
@@ -7,7 +6,6 @@ import subprocess
 import sys
 import winreg
 import ctypes
-import socket
 from functools import wraps
 from flask import Flask, request, jsonify, render_template_string, Response
 
@@ -21,29 +19,16 @@ CONFIG_FILE = os.path.join(application_path, 'config.json')
 
 app = Flask(__name__)
 
-# --- 全局隐蔽开关 ---
-SILENT_MODE = True
-LOG_FILE = os.path.join(os.environ.get('TEMP', application_path), 'wucore.dat')
-
-def silent_log(msg):
-    if not SILENT_MODE:
-        try:
-            with open(LOG_FILE, 'a', encoding='utf-8') as f:
-                f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | {msg}\n")
-        except Exception:
-            pass
-
 # --- 内存中的状态缓存 ---
 current_blocked_ips = set()
 last_mtime = 0
 
 # --- 隐蔽配置 ---
-RULE_PREFIX = "CoreNet-Diag-Block-"
-REG_NAME = "WindowsUpdateCore"
+RULE_PREFIX = "CoreNet-Diag-Block-"  # 极度枯燥的系统级规则名前缀
 DEFAULT_CONFIG = {
-    "web_port": 51883,
+    "web_port": 51883,               # 冷门高位端口，躲避常规扫描
     "admin_user": "admin",
-    "admin_pass": "123456",
+    "admin_pass": "123456",          # 部署后请务必修改
     "blocked_ips": []
 }
 
@@ -76,20 +61,13 @@ def execute_cmd(cmd):
 # ============ 系统检查与自启动模块 ============
 
 def get_app_path():
+    """获取当前程序路径（兼容 PyInstaller 打包后）"""
     if getattr(sys, 'frozen', False):
         return sys.executable
     return os.path.abspath(sys.argv[0])
 
-def is_port_available(port):
-    """检测端口是否被占用"""
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(('0.0.0.0', port))
-            return True
-    except OSError:
-        return False
-
 def check_firewall_status():
+    """检查 Windows 防火墙三大配置文件是否全部开启"""
     try:
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -110,6 +88,7 @@ def check_firewall_status():
         return None, f"检测异常: {e}"
 
 def enable_firewall():
+    """静默开启所有防火墙配置文件"""
     try:
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -124,6 +103,7 @@ def enable_firewall():
         return False
 
 def ensure_self_port_allowed(port):
+    """确保自身 Web 端口被防火墙放行（入站）"""
     rule_name = f"{RULE_PREFIX}Self-Allow-{port}"
     startupinfo = subprocess.STARTUPINFO()
     startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -139,7 +119,7 @@ def ensure_self_port_allowed(port):
     )
     result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True, startupinfo=startupinfo)
     if 'EXISTS' in result.stdout:
-        return True, "自身端口已放行"
+        return True, "自身端口规则已存在"
 
     cmd = (
         f'netsh advfirewall firewall add rule '
@@ -153,20 +133,22 @@ def ensure_self_port_allowed(port):
     return False, "放行端口失败（需管理员权限）"
 
 def add_to_startup():
+    """写入注册表 Run 键，实现开机自启动（用户级，无需管理员）"""
     try:
         app_path = get_app_path()
         key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE) as key:
-            winreg.SetValueEx(key, REG_NAME, 0, winreg.REG_SZ, f'"{app_path}"')
+            winreg.SetValueEx(key, "WindowsUpdateCore", 0, winreg.REG_SZ, f'"{app_path}"')
         return True
     except Exception:
         return False
 
 def remove_from_startup():
+    """从注册表移除开机自启动"""
     try:
         key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE) as key:
-            winreg.DeleteValue(key, REG_NAME)
+            winreg.DeleteValue(key, "WindowsUpdateCore")
         return True
     except FileNotFoundError:
         return True
@@ -174,21 +156,14 @@ def remove_from_startup():
         return False
 
 def is_in_startup():
+    """检查是否已加入开机自启动"""
     try:
         key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ) as key:
-            winreg.QueryValueEx(key, REG_NAME)
+            winreg.QueryValueEx(key, "WindowsUpdateCore")
             return True
     except FileNotFoundError:
         return False
-
-def hide_console():
-    try:
-        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
-        if hwnd:
-            ctypes.windll.user32.ShowWindow(hwnd, 0)
-    except Exception:
-        pass
 
 # --- 核心防火墙规则操作 ---
 def add_firewall_rule(ip):
@@ -205,18 +180,18 @@ def remove_firewall_rule(ip):
 # --- 核心：配置文件热更新与同步引擎 ---
 def sync_firewall():
     global current_blocked_ips
-    try:
-        config = load_config()
-        target_ips = set(config.get('blocked_ips', []))
-        ips_to_add = target_ips - current_blocked_ips
-        for ip in ips_to_add:
-            add_firewall_rule(ip)
-        ips_to_remove = current_blocked_ips - target_ips
-        for ip in ips_to_remove:
-            remove_firewall_rule(ip)
-        current_blocked_ips = target_ips
-    except Exception as e:
-        silent_log(f"防火墙同步异常: {e}")
+    config = load_config()
+    target_ips = set(config.get('blocked_ips', []))
+    
+    ips_to_add = target_ips - current_blocked_ips
+    for ip in ips_to_add:
+        add_firewall_rule(ip)
+        
+    ips_to_remove = current_blocked_ips - target_ips
+    for ip in ips_to_remove:
+        remove_firewall_rule(ip)
+        
+    current_blocked_ips = target_ips
 
 def config_watcher():
     global last_mtime
@@ -248,16 +223,13 @@ def requires_auth(f):
         return f(*args, **kwargs)
     return decorated
 
-# --- 抹掉服务器指纹 ---
 @app.after_request
 def remove_server_header(response):
     response.headers.pop('Server', None)
     response.headers.pop('X-Powered-By', None)
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
     return response
-
-@app.errorhandler(404)
-def not_found(e):
-    return Response('Not Found', 404)
 
 @app.route('/')
 @requires_auth
@@ -268,46 +240,53 @@ def index():
     <html lang="zh-CN">
     <head>
         <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta http-equiv="X-UA-Compatible" content="IE=edge">
         <title>系统网络诊断工具</title>
         <style>
             *{margin:0;padding:0;box-sizing:border-box}
-            body{font-family:"Segoe UI",system-ui,-apple-system,sans-serif;background:#f0f2f5;color:#333;font-size:14px}
-            .container{max-width:800px;margin:40px auto;padding:0 20px}
+            body{font-family:"Microsoft YaHei","SimHei","Segoe UI",Tahoma,sans-serif;background:#e8eaed;color:#333;font-size:14px;line-height:1.5}
+            .container{max-width:800px;margin:30px auto;padding:0 20px}
             h3{font-size:18px;color:#555;margin-bottom:20px;font-weight:600}
-            .card{background:#fff;border:1px solid #d1d5db;border-radius:4px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
-            .card-header{padding:12px 16px;background:#f8f9fa;border-bottom:1px solid #e5e7eb;font-weight:600;color:#444;font-size:13px;display:flex;justify-content:space-between;align-items:center}
+            .card{background:#fff;border:1px solid #ccc;border-radius:2px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,0.1)}
+            .card-header{padding:10px 16px;background:#f5f5f5;border-bottom:1px solid #ddd;font-weight:600;color:#444;font-size:13px;overflow:hidden}
+            .card-header span{float:left;line-height:28px}
+            .card-header button{float:right}
             .card-body{padding:16px}
-            .status-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;text-align:center}
-            .status-item small{display:block;color:#6b7280;font-size:12px;margin-bottom:4px}
-            .status-item span{font-size:14px}
-            .text-success{color:#059669}.text-danger{color:#dc2626}.text-warning{color:#d97706}
-            .btn{padding:6px 14px;border:1px solid #d1d5db;background:#fff;color:#374151;border-radius:4px;cursor:pointer;font-size:13px}
-            .btn:hover{background:#f3f4f6}
+            .status-grid{width:100%;display:table;table-layout:fixed}
+            .status-item{display:table-cell;text-align:center;width:33.33%;vertical-align:top}
+            .status-item small{display:block;color:#666;font-size:12px;margin-bottom:4px}
+            .status-item span{font-size:14px;font-weight:bold}
+            .text-success{color:#059669}.text-danger{color:#dc2626}.text-warning{color:#b45309}
+            .btn{padding:5px 12px;border:1px solid #bbb;background:#fff;color:#333;border-radius:2px;cursor:pointer;font-size:13px;font-family:inherit}
+            .btn:hover{background:#f0f0f0}
             .btn-secondary{background:#6b7280;color:#fff;border-color:#6b7280}
             .btn-secondary:hover{background:#4b5563}
             .btn-success{color:#059669;border-color:#059669;background:#fff}
             .btn-success:hover{background:#ecfdf5}
             .btn-danger{color:#dc2626;border-color:#dc2626;background:#fff}
             .btn-danger:hover{background:#fef2f2}
-            .btn-sm{padding:4px 10px;font-size:12px}
-            input[type=text]{padding:8px 12px;border:1px solid #d1d5db;border-radius:4px;flex:1;font-size:13px;outline:none}
+            .btn-sm{padding:3px 8px;font-size:12px}
+            input[type=text]{padding:6px 10px;border:1px solid #bbb;border-radius:2px;flex:1;font-size:13px;font-family:inherit;outline:none}
             input[type=text]:focus{border-color:#6b7280}
             .d-flex{display:flex;gap:10px}
             table{width:100%;border-collapse:collapse;font-size:13px}
-            th,td{padding:10px 16px;text-align:left;border-bottom:1px solid #e5e7eb}
-            th{background:#f8f9fa;color:#6b7280;font-weight:600;font-size:12px}
+            th,td{padding:8px 16px;text-align:left;border-bottom:1px solid #e5e7eb}
+            th{background:#f8f9fa;color:#666;font-weight:600;font-size:12px}
             .text-end{text-align:right}
             .text-danger{color:#dc2626;font-weight:600}
-            .text-muted{color:#6b7280}
-            .empty{padding:24px;text-align:center;color:#9ca3af}
+            .text-muted{color:#888}
+            .empty{padding:24px;text-align:center;color:#999}
+            .port-info{font-size:11px;color:#999;text-align:center;margin-top:12px;border-top:1px solid #eee;padding-top:8px}
+            .startup-wrap{margin-top:4px}
+            .clearfix::after{content:"";display:table;clear:both}
         </style>
     </head>
     <body>
         <div class="container">
             <h3>⚙️ 网络诊断与终端隔离控制台</h3>
+            
             <div class="card">
-                <div class="card-header">
+                <div class="card-header clearfix">
                     <span>系统状态</span>
                     <button class="btn btn-sm" onclick="refreshStatus()">刷新</button>
                 </div>
@@ -323,7 +302,7 @@ def index():
                         </div>
                         <div class="status-item">
                             <small>开机自启动</small>
-                            <div style="display:flex;align-items:center;justify-content:center;gap:8px;margin-top:4px">
+                            <div class="startup-wrap">
                                 <span id="startupStatus">检测中...</span>
                                 <button id="startupBtn" class="btn btn-sm" onclick="toggleStartup()">--</button>
                             </div>
@@ -331,6 +310,7 @@ def index():
                     </div>
                 </div>
             </div>
+            
             <div class="card">
                 <div class="card-body">
                     <form id="addForm" class="d-flex">
@@ -339,6 +319,7 @@ def index():
                     </form>
                 </div>
             </div>
+            
             <div class="card">
                 <div class="card-header">已隔离终端列表</div>
                 <div class="card-body" style="padding:0">
@@ -360,43 +341,42 @@ def index():
         </div>
         <script>
             function refreshStatus() {
-                fetch('/api/status').then(r => r.json()).then(data => {
-                    const fwEl = document.getElementById('fwStatus');
-                    fwEl.textContent = data.firewall_message;
-                    fwEl.className = (data.firewall_enabled === true ? 'text-success' : (data.firewall_enabled === false ? 'text-danger' : 'text-warning'));
-                    const portEl = document.getElementById('portStatus');
-                    portEl.textContent = data.self_port_message;
-                    portEl.className = data.self_port_allowed ? 'text-success' : 'text-warning';
-                    const stEl = document.getElementById('startupStatus');
-                    stEl.textContent = data.startup_enabled ? '已启用' : '未启用';
-                    const btn = document.getElementById('startupBtn');
-                    const action = data.startup_enabled ? 'disable' : 'enable';
-                    btn.textContent = data.startup_enabled ? '关闭' : '启用';
-                    btn.className = 'btn btn-sm ' + (data.startup_enabled ? 'btn-danger' : 'btn-success');
-                    btn.onclick = () => toggleStartup(action);
+                fetch('/api/status').then(function(r){return r.json()}).then(function(data){
+                    var fwEl=document.getElementById('fwStatus');
+                    fwEl.textContent=data.firewall_message;
+                    if(data.firewall_enabled===true)fwEl.className='text-success';
+                    else if(data.firewall_enabled===false)fwEl.className='text-danger';
+                    else fwEl.className='text-warning';
+                    
+                    var portEl=document.getElementById('portStatus');
+                    portEl.textContent=data.self_port_message;
+                    portEl.className=data.self_port_allowed?'text-success':'text-warning';
+                    
+                    var stEl=document.getElementById('startupStatus');
+                    stEl.textContent=data.startup_enabled?'已启用':'未启用';
+                    
+                    var btn=document.getElementById('startupBtn');
+                    var action=data.startup_enabled?'disable':'enable';
+                    btn.textContent=data.startup_enabled?'关闭':'启用';
+                    btn.className='btn btn-sm '+(data.startup_enabled?'btn-danger':'btn-success');
+                    btn.onclick=function(){toggleStartup(action)};
                 });
             }
-            function toggleStartup(action) {
-                fetch('/api/startup', {
-                    method: 'POST', headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({action: action})
-                }).then(r => r.json()).then(() => refreshStatus());
+            function toggleStartup(action){
+                fetch('/api/startup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:action})})
+                .then(function(r){return r.json()}).then(function(){refreshStatus()});
             }
-            document.getElementById('addForm').addEventListener('submit', function(e) {
+            document.getElementById('addForm').addEventListener('submit',function(e){
                 e.preventDefault();
-                fetch('/api/block', {
-                    method: 'POST', headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ip: document.getElementById('ipInput').value.trim()})
-                }).then(res => res.json()).then(data => location.reload());
+                fetch('/api/block',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip:document.getElementById('ipInput').value.trim()})})
+                .then(function(res){return res.json()}).then(function(data){location.reload()});
             });
-            function unblockIp(ip) {
-                if(!confirm('确定要恢复 ' + ip + ' 的网络连接吗？')) return;
-                fetch('/api/unblock', {
-                    method: 'POST', headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ip: ip})
-                }).then(res => res.json()).then(data => location.reload());
+            function unblockIp(ip){
+                if(!confirm('确定要恢复 '+ip+' 的网络连接吗？'))return;
+                fetch('/api/unblock',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip:ip})})
+                .then(function(res){return res.json()}).then(function(data){location.reload()});
             }
-            document.addEventListener('DOMContentLoaded', refreshStatus);
+            document.addEventListener('DOMContentLoaded',refreshStatus);
         </script>
     </body>
     </html>
@@ -450,55 +430,28 @@ def unblock_api():
     return jsonify({"success": True})
 
 if __name__ == '__main__':
-    try:
-        hide_console()
-        
-        # 清理历史死规则（忽略失败）
-        try:
-            execute_cmd(f'powershell -WindowStyle Hidden -Command "Remove-NetFirewallRule -DisplayName \'{RULE_PREFIX}*\' -ErrorAction SilentlyContinue"')
-        except Exception:
-            pass
-        
-        cfg = load_config()
-        port = cfg.get('web_port', 51883)
-        
-        # 防火墙相关（失败不阻断）
-        try:
-            fw_ok_before, _ = check_firewall_status()
-            if not fw_ok_before:
-                enable_firewall()
-        except Exception:
-            pass
-        
-        try:
-            ensure_self_port_allowed(port)
-        except Exception:
-            pass
-        
-        try:
-            sync_firewall()
-        except Exception:
-            pass
-        
-        threading.Thread(target=config_watcher, daemon=True).start()
-        
-        import logging
-        log = logging.getLogger('werkzeug')
-        log.setLevel(logging.ERROR)
-        log.disabled = True
-        
-        # 检测端口，如果被占用则尝试 +1
-        actual_port = port
-        if not is_port_available(port):
-            actual_port = port + 1
-            if not is_port_available(actual_port):
-                actual_port = port + 2
-        
-        # 静默启动服务
-        try:
-            app.run(host='0.0.0.0', port=actual_port, debug=False, use_reloader=False)
-        except Exception as e:
-            silent_log(f"服务启动失败: {e}")
-            
-    except Exception as e:
-        silent_log(f"程序致命错误: {e}")
+    # 使用 PowerShell 精准匹配并清理历史死规则
+    execute_cmd(f'powershell -WindowStyle Hidden -Command "Remove-NetFirewallRule -DisplayName \'{RULE_PREFIX}*\' -ErrorAction SilentlyContinue"')
+    
+    cfg = load_config()
+    port = cfg.get('web_port', 51883)
+    
+    # 1. 启动时检查并尝试开启防火墙
+    fw_ok, fw_msg = check_firewall_status()
+    if not fw_ok:
+        enable_firewall()
+    
+    # 2. 启动时自动确保自身端口被防火墙放行
+    port_ok, port_msg = ensure_self_port_allowed(port)
+    
+    sync_firewall()
+    
+    # 启动文件监视器
+    threading.Thread(target=config_watcher, daemon=True).start()
+    
+    # 禁用 werkzeug 默认的终端日志输出
+    import logging
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.ERROR)
+    
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
