@@ -18,21 +18,33 @@ else:
 
 CONFIG_FILE = os.path.join(application_path, 'config.json')
 
-# ============ 新增：文件日志（排查神器） ============
+# ============ 日志开关：仅 Debug 版（有控制台窗口）启用 ============
+def is_debug_mode():
+    """检测是否有控制台窗口：有=Debug版，无=正式版"""
+    try:
+        return ctypes.windll.kernel32.GetConsoleWindow() != 0
+    except Exception:
+        return False
+
+LOG_ENABLED = is_debug_mode()
 LOG_PATH = os.path.join(os.environ.get('TEMP', application_path), 'wucore.log')
 
 def write_log(msg):
-    """写日志到 %TEMP%\wucore.log，无窗口也能排查"""
+    """仅 Debug 版写日志+打印；正式版完全静默"""
+    if not LOG_ENABLED:
+        return
     try:
         ts = time.strftime('%Y-%m-%d %H:%M:%S')
+        line = f"[{ts}] {msg}"
+        print(line)  # Debug版黑框可见
         with open(LOG_PATH, 'a', encoding='utf-8') as f:
-            f.write(f"[{ts}] {msg}\n")
+            f.write(line + "\n")
     except Exception:
         pass
 
-# 启动时先记一条分隔线，方便区分每次运行
-write_log("=" * 50)
-write_log("程序入口")
+if LOG_ENABLED:
+    write_log("=" * 50)
+    write_log("Debug 模式启动")
 
 app = Flask(__name__)
 
@@ -261,7 +273,7 @@ def index():
         <style>
             *{margin:0;padding:0;box-sizing:border-box}
             body{font-family:"Microsoft YaHei","SimHei","Segoe UI",Tahoma,sans-serif;background:#e8eaed;color:#333;font-size:14px;line-height:1.5}
-            .container{max-width:800px;margin:30px auto;padding:0 20px}
+            .container{max-width:900px;margin:30px auto;padding:0 20px}
             h3{font-size:18px;color:#555;margin-bottom:20px;font-weight:600}
             .card{background:#fff;border:1px solid #ccc;border-radius:2px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,0.1)}
             .card-header{padding:10px 16px;background:#f5f5f5;border-bottom:1px solid #ddd;font-weight:600;color:#444;font-size:13px;overflow:hidden}
@@ -281,51 +293,71 @@ def index():
             .btn-success:hover{background:#ecfdf5}
             .btn-danger{color:#dc2626;border-color:#dc2626;background:#fff}
             .btn-danger:hover{background:#fef2f2}
+            .btn-outline-light{color:#fff;border-color:#fff;background:transparent}
+            .btn-outline-light:hover{background:rgba(255,255,255,0.1)}
+            .btn-outline-primary{color:#2563eb;border-color:#2563eb;background:#fff}
+            .btn-outline-primary:hover{background:#eff6ff}
+            .btn-outline-success{color:#059669;border-color:#059669;background:#fff}
+            .btn-outline-success:hover{background:#ecfdf5}
+            .btn-outline-danger{color:#dc2626;border-color:#dc2626;background:#fff}
+            .btn-outline-danger:hover{background:#fef2f2}
             .btn-sm{padding:3px 8px;font-size:12px}
             input[type=text]{padding:6px 10px;border:1px solid #bbb;border-radius:2px;flex:1;font-size:13px;font-family:inherit;outline:none}
             input[type=text]:focus{border-color:#6b7280}
             .d-flex{display:flex;gap:10px}
+            .d-inline-flex{display:inline-flex;gap:8px;align-items:center}
             table{width:100%;border-collapse:collapse;font-size:13px}
             th,td{padding:8px 16px;text-align:left;border-bottom:1px solid #e5e7eb}
             th{background:#f8f9fa;color:#666;font-weight:600;font-size:12px}
             .text-end{text-align:right}
             .text-danger{color:#dc2626;font-weight:600}
             .text-muted{color:#888}
+            .text-white{color:#fff}
+            .bg-dark{background:#333}
             .empty{padding:24px;text-align:center;color:#999}
-            .port-info{font-size:11px;color:#999;text-align:center;margin-top:12px;border-top:1px solid #eee;padding-top:8px}
-            .startup-wrap{margin-top:4px}
             .clearfix::after{content:"";display:table;clear:both}
+            .mb-2{margin-bottom:8px}
+            .mb-4{margin-bottom:16px}
+            .mt-5{margin-top:30px}
+            .me-2{margin-right:8px}
+            .p-0{padding:0}
+            .py-3{padding-top:12px;padding-bottom:12px}
+            .align-middle{vertical-align:middle}
+            .fw-bold{font-weight:bold}
+            .border-start{border-left:4px solid #333;padding-left:12px}
         </style>
     </head>
     <body>
-        <div class="container">
-            <h3>⚙️ 网络诊断与终端隔离控制台</h3>
-            <div class="card">
-                <div class="card-header clearfix">
+        <div class="container mt-5">
+            <h3 class="mb-4">⚙️ 网络诊断与终端隔离控制台</h3>
+            
+            <div class="card mb-4 border-start">
+                <div class="card-header bg-dark text-white clearfix">
                     <span>系统状态</span>
-                    <button class="btn btn-sm" onclick="refreshStatus()">刷新</button>
+                    <button class="btn btn-sm btn-outline-light" onclick="refreshStatus()">刷新</button>
                 </div>
                 <div class="card-body">
                     <div class="status-grid">
-                        <div class="status-item">
+                        <div class="status-item mb-2">
                             <small>Windows 防火墙</small>
                             <span id="fwStatus">检测中...</span>
                         </div>
-                        <div class="status-item">
+                        <div class="status-item mb-2">
                             <small>本机服务端口</small>
                             <span id="portStatus">检测中...</span>
                         </div>
-                        <div class="status-item">
+                        <div class="status-item mb-2">
                             <small>开机自启动</small>
-                            <div class="startup-wrap">
-                                <span id="startupStatus">检测中...</span>
-                                <button id="startupBtn" class="btn btn-sm" onclick="toggleStartup()">--</button>
+                            <div class="d-inline-flex" style="margin-top:4px">
+                                <span id="startupStatus" class="me-2">检测中...</span>
+                                <button id="startupBtn" class="btn btn-sm btn-outline-primary" onclick="toggleStartup()">--</button>
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
-            <div class="card">
+            
+            <div class="card mb-4">
                 <div class="card-body">
                     <form id="addForm" class="d-flex">
                         <input type="text" id="ipInput" placeholder="输入目标 IPv4 地址" required>
@@ -333,16 +365,17 @@ def index():
                     </form>
                 </div>
             </div>
+            
             <div class="card">
                 <div class="card-header">已隔离终端列表</div>
-                <div class="card-body" style="padding:0">
+                <div class="card-body p-0">
                     <table>
                         <thead><tr><th>IP 地址</th><th class="text-end">操作</th></tr></thead>
                         <tbody>
                             {% for ip in ips %}
                             <tr>
-                                <td class="text-danger">{{ ip }}</td>
-                                <td class="text-end"><button class="btn btn-sm btn-success" onclick="unblockIp('{{ ip }}')">恢复连接</button></td>
+                                <td class="align-middle text-danger fw-bold">{{ ip }}</td>
+                                <td class="text-end"><button class="btn btn-sm btn-outline-success" onclick="unblockIp('{{ ip }}')">恢复连接</button></td>
                             </tr>
                             {% else %}
                             <tr><td colspan="2" class="empty">暂无隔离终端</td></tr>
@@ -357,9 +390,7 @@ def index():
                 fetch('/api/status').then(function(r){return r.json()}).then(function(data){
                     var fwEl=document.getElementById('fwStatus');
                     fwEl.textContent=data.firewall_message;
-                    if(data.firewall_enabled===true)fwEl.className='text-success';
-                    else if(data.firewall_enabled===false)fwEl.className='text-danger';
-                    else fwEl.className='text-warning';
+                    fwEl.className=(data.firewall_enabled===true?'text-success':(data.firewall_enabled===false?'text-danger':'text-warning'));
                     var portEl=document.getElementById('portStatus');
                     portEl.textContent=data.self_port_message;
                     portEl.className=data.self_port_allowed?'text-success':'text-warning';
@@ -368,7 +399,7 @@ def index():
                     var btn=document.getElementById('startupBtn');
                     var action=data.startup_enabled?'disable':'enable';
                     btn.textContent=data.startup_enabled?'关闭':'启用';
-                    btn.className='btn btn-sm '+(data.startup_enabled?'btn-danger':'btn-success');
+                    btn.className='btn btn-sm '+(data.startup_enabled?'btn-outline-danger':'btn-outline-success');
                     btn.onclick=function(){toggleStartup(action)};
                 });
             }
@@ -441,7 +472,6 @@ def unblock_api():
 
 if __name__ == '__main__':
     try:
-        # 清理历史死规则
         execute_cmd(f'powershell -WindowStyle Hidden -Command "Remove-NetFirewallRule -DisplayName \'{RULE_PREFIX}*\' -ErrorAction SilentlyContinue"')
         write_log("历史规则清理完成")
     except Exception as e:
@@ -451,7 +481,6 @@ if __name__ == '__main__':
     port = cfg.get('web_port', 51883)
     write_log(f"配置加载完成，目标端口: {port}")
     
-    # 1. 启动时检查防火墙状态
     try:
         fw_ok, fw_msg = check_firewall_status()
         write_log(f"防火墙状态: {fw_msg}")
@@ -461,7 +490,6 @@ if __name__ == '__main__':
     except Exception as e:
         write_log(f"防火墙检查异常: {e}")
     
-    # 2. 启动时自动确保自身端口被防火墙放行
     try:
         port_ok, port_msg = ensure_self_port_allowed(port)
         write_log(f"端口放行结果: {port_msg}")
@@ -474,15 +502,12 @@ if __name__ == '__main__':
     except Exception as e:
         write_log(f"规则同步异常: {e}")
     
-    # 启动文件监视器
     threading.Thread(target=config_watcher, daemon=True).start()
     
-    # 禁用 werkzeug 默认的终端日志输出
     import logging
     log = logging.getLogger('werkzeug')
     log.setLevel(logging.ERROR)
     
-    # 启动服务（带异常捕获）
     try:
         write_log(f"正在尝试启动 Flask 服务，监听 0.0.0.0:{port}")
         app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
