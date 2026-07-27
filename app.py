@@ -6,6 +6,7 @@ import subprocess
 import sys
 import winreg
 import ctypes
+import traceback
 from functools import wraps
 from flask import Flask, request, jsonify, render_template_string, Response
 
@@ -17,6 +18,22 @@ else:
 
 CONFIG_FILE = os.path.join(application_path, 'config.json')
 
+# ============ 新增：文件日志（排查神器） ============
+LOG_PATH = os.path.join(os.environ.get('TEMP', application_path), 'wucore.log')
+
+def write_log(msg):
+    """写日志到 %TEMP%\wucore.log，无窗口也能排查"""
+    try:
+        ts = time.strftime('%Y-%m-%d %H:%M:%S')
+        with open(LOG_PATH, 'a', encoding='utf-8') as f:
+            f.write(f"[{ts}] {msg}\n")
+    except Exception:
+        pass
+
+# 启动时先记一条分隔线，方便区分每次运行
+write_log("=" * 50)
+write_log("程序入口")
+
 app = Flask(__name__)
 
 # --- 内存中的状态缓存 ---
@@ -24,11 +41,11 @@ current_blocked_ips = set()
 last_mtime = 0
 
 # --- 隐蔽配置 ---
-RULE_PREFIX = "CoreNet-Diag-Block-"  # 极度枯燥的系统级规则名前缀
+RULE_PREFIX = "CoreNet-Diag-Block-"
 DEFAULT_CONFIG = {
-    "web_port": 51883,               # 冷门高位端口，躲避常规扫描
+    "web_port": 51883,
     "admin_user": "admin",
-    "admin_pass": "123456",          # 部署后请务必修改
+    "admin_pass": "123456",
     "blocked_ips": []
 }
 
@@ -37,11 +54,15 @@ def load_config():
     if not os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             json.dump(DEFAULT_CONFIG, f, indent=4)
+        write_log("config.json 不存在，已创建默认配置")
         return DEFAULT_CONFIG
     try:
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except:
+            c = json.load(f)
+            write_log("配置加载成功")
+            return c
+    except Exception as e:
+        write_log(f"配置加载失败: {e}")
         return DEFAULT_CONFIG
 
 def save_config(config):
@@ -55,19 +76,18 @@ def execute_cmd(cmd):
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         result = subprocess.run(cmd, shell=True, capture_output=True, text=False, startupinfo=startupinfo)
         return result.returncode == 0
-    except Exception:
+    except Exception as e:
+        write_log(f"命令执行异常: {e}")
         return False
 
 # ============ 系统检查与自启动模块 ============
 
 def get_app_path():
-    """获取当前程序路径（兼容 PyInstaller 打包后）"""
     if getattr(sys, 'frozen', False):
         return sys.executable
     return os.path.abspath(sys.argv[0])
 
 def check_firewall_status():
-    """检查 Windows 防火墙三大配置文件是否全部开启"""
     try:
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -88,7 +108,6 @@ def check_firewall_status():
         return None, f"检测异常: {e}"
 
 def enable_firewall():
-    """静默开启所有防火墙配置文件"""
     try:
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -103,7 +122,6 @@ def enable_firewall():
         return False
 
 def ensure_self_port_allowed(port):
-    """确保自身 Web 端口被防火墙放行（入站）"""
     rule_name = f"{RULE_PREFIX}Self-Allow-{port}"
     startupinfo = subprocess.STARTUPINFO()
     startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -133,18 +151,17 @@ def ensure_self_port_allowed(port):
     return False, "放行端口失败（需管理员权限）"
 
 def add_to_startup():
-    """写入注册表 Run 键，实现开机自启动（用户级，无需管理员）"""
     try:
         app_path = get_app_path()
         key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE) as key:
             winreg.SetValueEx(key, "WindowsUpdateCore", 0, winreg.REG_SZ, f'"{app_path}"')
         return True
-    except Exception:
+    except Exception as e:
+        write_log(f"自启动写入失败: {e}")
         return False
 
 def remove_from_startup():
-    """从注册表移除开机自启动"""
     try:
         key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE) as key:
@@ -156,7 +173,6 @@ def remove_from_startup():
         return False
 
 def is_in_startup():
-    """检查是否已加入开机自启动"""
     try:
         key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ) as key:
@@ -284,7 +300,6 @@ def index():
     <body>
         <div class="container">
             <h3>⚙️ 网络诊断与终端隔离控制台</h3>
-            
             <div class="card">
                 <div class="card-header clearfix">
                     <span>系统状态</span>
@@ -310,7 +325,6 @@ def index():
                     </div>
                 </div>
             </div>
-            
             <div class="card">
                 <div class="card-body">
                     <form id="addForm" class="d-flex">
@@ -319,7 +333,6 @@ def index():
                     </form>
                 </div>
             </div>
-            
             <div class="card">
                 <div class="card-header">已隔离终端列表</div>
                 <div class="card-body" style="padding:0">
@@ -340,21 +353,18 @@ def index():
             </div>
         </div>
         <script>
-            function refreshStatus() {
+            function refreshStatus(){
                 fetch('/api/status').then(function(r){return r.json()}).then(function(data){
                     var fwEl=document.getElementById('fwStatus');
                     fwEl.textContent=data.firewall_message;
                     if(data.firewall_enabled===true)fwEl.className='text-success';
                     else if(data.firewall_enabled===false)fwEl.className='text-danger';
                     else fwEl.className='text-warning';
-                    
                     var portEl=document.getElementById('portStatus');
                     portEl.textContent=data.self_port_message;
                     portEl.className=data.self_port_allowed?'text-success':'text-warning';
-                    
                     var stEl=document.getElementById('startupStatus');
                     stEl.textContent=data.startup_enabled?'已启用':'未启用';
-                    
                     var btn=document.getElementById('startupBtn');
                     var action=data.startup_enabled?'disable':'enable';
                     btn.textContent=data.startup_enabled?'关闭':'启用';
@@ -430,21 +440,39 @@ def unblock_api():
     return jsonify({"success": True})
 
 if __name__ == '__main__':
-    # 使用 PowerShell 精准匹配并清理历史死规则
-    execute_cmd(f'powershell -WindowStyle Hidden -Command "Remove-NetFirewallRule -DisplayName \'{RULE_PREFIX}*\' -ErrorAction SilentlyContinue"')
+    try:
+        # 清理历史死规则
+        execute_cmd(f'powershell -WindowStyle Hidden -Command "Remove-NetFirewallRule -DisplayName \'{RULE_PREFIX}*\' -ErrorAction SilentlyContinue"')
+        write_log("历史规则清理完成")
+    except Exception as e:
+        write_log(f"历史规则清理异常: {e}")
     
     cfg = load_config()
     port = cfg.get('web_port', 51883)
+    write_log(f"配置加载完成，目标端口: {port}")
     
-    # 1. 启动时检查并尝试开启防火墙
-    fw_ok, fw_msg = check_firewall_status()
-    if not fw_ok:
-        enable_firewall()
+    # 1. 启动时检查防火墙状态
+    try:
+        fw_ok, fw_msg = check_firewall_status()
+        write_log(f"防火墙状态: {fw_msg}")
+        if not fw_ok:
+            write_log("防火墙未全开，尝试启用...")
+            enable_firewall()
+    except Exception as e:
+        write_log(f"防火墙检查异常: {e}")
     
     # 2. 启动时自动确保自身端口被防火墙放行
-    port_ok, port_msg = ensure_self_port_allowed(port)
+    try:
+        port_ok, port_msg = ensure_self_port_allowed(port)
+        write_log(f"端口放行结果: {port_msg}")
+    except Exception as e:
+        write_log(f"端口放行异常: {e}")
     
-    sync_firewall()
+    try:
+        sync_firewall()
+        write_log("防火墙规则同步完成")
+    except Exception as e:
+        write_log(f"规则同步异常: {e}")
     
     # 启动文件监视器
     threading.Thread(target=config_watcher, daemon=True).start()
@@ -454,4 +482,10 @@ if __name__ == '__main__':
     log = logging.getLogger('werkzeug')
     log.setLevel(logging.ERROR)
     
-    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+    # 启动服务（带异常捕获）
+    try:
+        write_log(f"正在尝试启动 Flask 服务，监听 0.0.0.0:{port}")
+        app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+    except Exception as e:
+        write_log(f"Flask 启动失败: {e}")
+        write_log(traceback.format_exc())
