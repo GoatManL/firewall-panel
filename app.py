@@ -7,7 +7,7 @@ import sys
 import winreg
 import ctypes
 from functools import wraps
-from flask import Flask, request, jsonify, render_template_string, Response
+from flask import Flask, request, jsonify, render_template, Response
 
 # 兼容 PyInstaller 打包后的运行路径
 if getattr(sys, 'frozen', False):
@@ -17,18 +17,23 @@ else:
 
 CONFIG_FILE = os.path.join(application_path, 'config.json')
 
-app = Flask(__name__)
+# 确保模板文件夹存在，适配 PyInstaller
+template_dir = os.path.join(application_path, 'templates')
+if not os.path.exists(template_dir):
+    os.makedirs(template_dir)
+
+app = Flask(__name__, template_folder=template_dir)
 
 # --- 内存中的状态缓存 ---
 current_blocked_ips = set()
 last_mtime = 0
 
 # --- 隐蔽配置 ---
-RULE_PREFIX = "CoreNet-Diag-Block-"  # 极度枯燥的系统级规则名前缀
+RULE_PREFIX = "CoreNet-Diag-Block-"
 DEFAULT_CONFIG = {
-    "web_port": 51883,               # 冷门高位端口，躲避常规扫描
+    "web_port": 51883,
     "admin_user": "admin",
-    "admin_pass": "123456",          # 部署后请务必修改
+    "admin_pass": "123456",
     "blocked_ips": []
 }
 
@@ -58,10 +63,9 @@ def execute_cmd(cmd):
     except Exception:
         return False
 
-# ============ 新增：系统检查与自启动模块 ============
+# ============ 系统检查、防火墙自启与自启动模块 ============
 
 def get_app_path():
-    """获取当前程序路径（兼容 PyInstaller 打包后）"""
     if getattr(sys, 'frozen', False):
         return sys.executable
     return os.path.abspath(sys.argv[0])
@@ -83,17 +87,29 @@ def check_firewall_status():
             disabled = [p['Name'] for p in profiles if not p.get('Enabled')]
             if disabled:
                 return False, f"防火墙未开启: {', '.join(disabled)}"
-            return True, "防火墙正常"
+            return True, "防火墙运行正常"
     except Exception as e:
-        return None, f"检测异常: {e}"
+        return None, f"防火墙状态检测异常: {e}"
+
+def enable_firewall():
+    """强制开启 Win10 系统的全部防火墙配置文件"""
+    try:
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        cmd = (
+            'powershell -WindowStyle Hidden -Command "'
+            'Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled True"'
+        )
+        execute_cmd(cmd)
+    except Exception:
+        pass
 
 def ensure_self_port_allowed(port):
-    """确保自身 Web 端口被防火墙放行（入站）。只按端口放行，不绑定程序，避免打包差异。"""
+    """确保自身 Web 端口被防火墙放行"""
     rule_name = f"{RULE_PREFIX}Self-Allow-{port}"
     startupinfo = subprocess.STARTUPINFO()
     startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
 
-    # 用 PowerShell 精确检查规则是否存在
     check_cmd = (
         f'powershell -WindowStyle Hidden -Command "'
         f'try {{ '
@@ -105,9 +121,8 @@ def ensure_self_port_allowed(port):
     )
     result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True, startupinfo=startupinfo)
     if 'EXISTS' in result.stdout:
-        return True, "自身端口规则已存在"
+        return True, "端口放行规则已存在"
 
-    # 不存在则创建入站允许规则
     cmd = (
         f'netsh advfirewall firewall add rule '
         f'name="{rule_name}" dir=in action=allow '
@@ -116,11 +131,10 @@ def ensure_self_port_allowed(port):
     )
     success = execute_cmd(cmd)
     if success:
-        return True, f"已放行端口 {port}"
-    return False, "放行端口失败（可能需要管理员权限）"
+        return True, f"已成功放行本机端口 {port}"
+    return False, "放行端口失败 (可能是因为缺乏管理员权限)"
 
 def add_to_startup():
-    """写入注册表 Run 键，实现开机自启动（用户级，无需管理员）"""
     try:
         app_path = get_app_path()
         key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -131,7 +145,6 @@ def add_to_startup():
         return False
 
 def remove_from_startup():
-    """从注册表移除开机自启动"""
     try:
         key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE) as key:
@@ -143,7 +156,6 @@ def remove_from_startup():
         return False
 
 def is_in_startup():
-    """检查是否已加入开机自启动"""
     try:
         key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ) as key:
@@ -153,7 +165,6 @@ def is_in_startup():
         return False
 
 def set_console_icon(icon_path):
-    """设置控制台窗口图标（仅对带控制台窗口生效，如未使用 --noconsole 打包）"""
     try:
         if not os.path.exists(icon_path):
             return False
@@ -164,13 +175,12 @@ def set_console_icon(icon_path):
             return False
         hwnd = ctypes.windll.kernel32.GetConsoleWindow()
         if hwnd:
-            ctypes.windll.user32.SendMessageW(hwnd, 0x80, 0, hicon)  # ICON_SMALL
-            ctypes.windll.user32.SendMessageW(hwnd, 0x80, 1, hicon)  # ICON_BIG
-        return True
+            ctypes.windll.user32.SendMessageW(hwnd, 0x80, 0, hicon) 
+            ctypes.windll.user32.SendMessageW(hwnd, 0x80, 1, hicon) 
+            return True
     except Exception:
         return False
 
-# 【修复1：确保进站和出站规则各自独立执行，完美拦截 iVMS】
 def add_firewall_rule(ip):
     rule_name = f"{RULE_PREFIX}{ip}"
     cmd_in = f'netsh advfirewall firewall add rule name="{rule_name}" dir=in action=block remoteip={ip}'
@@ -219,7 +229,7 @@ def check_auth(username, password):
     return username == cfg.get('admin_user') and password == cfg.get('admin_pass')
 
 def authenticate():
-    return Response('Access Denied.\n', 401, {'WWW-Authenticate': 'Basic realm="System Login"'})
+    return Response('拒绝访问，请提供正确的账号密码。\n', 401, {'WWW-Authenticate': 'Basic realm="System Login"'})
 
 def requires_auth(f):
     @wraps(f)
@@ -234,119 +244,7 @@ def requires_auth(f):
 @requires_auth
 def index():
     cfg = load_config()
-    html_template = """
-    <!DOCTYPE html>
-    <html lang="zh-CN">
-    <head>
-        <meta charset="UTF-8">
-        <title>CoreNet Diagnostic Service</title>
-        <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.1.3/css/bootstrap.min.css" rel="stylesheet">
-    </head>
-    <body class="bg-light">
-        <div class="container mt-5" style="max-width: 900px;">
-            <h3 class="mb-4 text-secondary">⚙️ Core Network Diagnostics & Isolation</h3>
-            
-            <!-- 新增：系统状态面板 -->
-            <div class="card mb-4 shadow-sm border-start border-4 border-dark">
-                <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
-                    <span>System Status</span>
-                    <button class="btn btn-sm btn-outline-light" onclick="refreshStatus()">Refresh</button>
-                </div>
-                <div class="card-body">
-                    <div class="row text-center">
-                        <div class="col-md-4 mb-2">
-                            <small class="text-muted d-block">Firewall</small>
-                            <span id="fwStatus" class="fw-bold">Checking...</span>
-                        </div>
-                        <div class="col-md-4 mb-2">
-                            <small class="text-muted d-block">Self Port</small>
-                            <span id="portStatus" class="fw-bold">Checking...</span>
-                        </div>
-                        <div class="col-md-4 mb-2">
-                            <small class="text-muted d-block">Auto Startup</small>
-                            <div class="d-flex align-items-center justify-content-center gap-2">
-                                <span id="startupStatus" class="fw-bold">Checking...</span>
-                                <button id="startupBtn" class="btn btn-sm btn-outline-primary" onclick="toggleStartup()">--</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="card mb-4 shadow-sm">
-                <div class="card-body">
-                    <form id="addForm" class="d-flex">
-                        <input type="text" id="ipInput" class="form-control me-2" placeholder="Target IPv4 Address" required>
-                        <button type="submit" class="btn btn-secondary">Isolate (拦截)</button>
-                    </form>
-                </div>
-            </div>
-            
-            <div class="card shadow-sm">
-                <div class="card-header bg-secondary text-white">Isolated Endpoint List (隔离列表)</div>
-                <div class="card-body p-0">
-                    <table class="table table-hover mb-0">
-                        <thead class="table-light"><tr><th>IP Address</th><th class="text-end">Action</th></tr></thead>
-                        <tbody>
-                            {% for ip in ips %}
-                            <tr>
-                                <td class="align-middle text-danger fw-bold">{{ ip }}</td>
-                                <td class="text-end"><button class="btn btn-sm btn-outline-success" onclick="unblockIp('{{ ip }}')">Restore (恢复)</button></td>
-                            </tr>
-                            {% else %}
-                            <tr><td colspan="2" class="text-center text-muted py-3">No isolated endpoints</td></tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-        <script>
-            function refreshStatus() {
-                fetch('/api/status').then(r => r.json()).then(data => {
-                    const fwEl = document.getElementById('fwStatus');
-                    fwEl.textContent = data.firewall_message;
-                    fwEl.className = 'fw-bold ' + (data.firewall_enabled === true ? 'text-success' : (data.firewall_enabled === false ? 'text-danger' : 'text-warning'));
-                    
-                    const portEl = document.getElementById('portStatus');
-                    portEl.textContent = data.self_port_message;
-                    portEl.className = 'fw-bold ' + (data.self_port_allowed ? 'text-success' : 'text-warning');
-                    
-                    const stEl = document.getElementById('startupStatus');
-                    stEl.textContent = data.startup_enabled ? 'Enabled' : 'Disabled';
-                    
-                    const btn = document.getElementById('startupBtn');
-                    const action = data.startup_enabled ? 'disable' : 'enable';
-                    btn.textContent = data.startup_enabled ? 'Disable' : 'Enable';
-                    btn.className = 'btn btn-sm ' + (data.startup_enabled ? 'btn-outline-danger' : 'btn-outline-success');
-                    btn.onclick = () => toggleStartup(action);
-                });
-            }
-            function toggleStartup(action) {
-                fetch('/api/startup', {
-                    method: 'POST', headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({action: action})
-                }).then(r => r.json()).then(() => refreshStatus());
-            }
-            document.getElementById('addForm').addEventListener('submit', function(e) {
-                e.preventDefault();
-                fetch('/api/block', {
-                    method: 'POST', headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ip: document.getElementById('ipInput').value.trim()})
-                }).then(res => res.json()).then(data => location.reload());
-            });
-            function unblockIp(ip) {
-                fetch('/api/unblock', {
-                    method: 'POST', headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ip: ip})
-                }).then(res => res.json()).then(data => location.reload());
-            }
-            document.addEventListener('DOMContentLoaded', refreshStatus);
-        </script>
-    </body>
-    </html>
-    """
-    return render_template_string(html_template, ips=cfg.get('blocked_ips', []))
+    return render_template('index.html', ips=cfg.get('blocked_ips', []))
 
 @app.route('/api/status')
 @requires_auth
@@ -371,7 +269,7 @@ def startup_api():
     elif action == 'disable':
         success = remove_from_startup()
     else:
-        return jsonify({"success": False, "error": "Invalid action"})
+        return jsonify({"success": False, "error": "无效的指令"})
     return jsonify({"success": success, "enabled": is_in_startup()})
 
 @app.route('/api/block', methods=['POST'])
@@ -394,35 +292,53 @@ def unblock_api():
         save_config(cfg)
     return jsonify({"success": True})
 
+@app.route('/api/restart', methods=['POST'])
+@requires_auth
+def restart_api():
+    """执行无缝重启"""
+    def do_restart():
+        time.sleep(1) # 给前端留出返回 JSON 的时间
+        subprocess.Popen([sys.executable] + sys.argv)
+        os._exit(0)
+    
+    threading.Thread(target=do_restart, daemon=True).start()
+    return jsonify({"success": True, "message": "服务即将重启"})
+
 if __name__ == '__main__':
-    # 【修复2：使用 PowerShell 精准匹配并清理历史死规则】
+    # 启动前清理历史规则
     execute_cmd(f'powershell -WindowStyle Hidden -Command "Remove-NetFirewallRule -DisplayName \'{RULE_PREFIX}*\' -ErrorAction SilentlyContinue"')
     
     cfg = load_config()
     port = cfg.get('web_port', 51883)
     
-    # 1. 启动时检查防火墙状态（仅打印，不阻断）
+    # 1. 检查防火墙并强制启动
     fw_ok, fw_msg = check_firewall_status()
-    print(f"[Firewall Check] {fw_msg}")
+    if fw_ok is False:
+        print("[启动检查] 发现防火墙未完全开启，正在尝试强制开启...")
+        enable_firewall()
+        fw_ok, fw_msg = check_firewall_status()
+    print(f"[防火墙状态] {fw_msg}")
     
-    # 2. 启动时自动确保自身端口被防火墙放行
+    # 2. 确保本机端口被放行
     port_ok, port_msg = ensure_self_port_allowed(port)
-    print(f"[Self Port Check] {port_msg}")
+    print(f"[本机端口] {port_msg}")
     
-    # 3. 如果有 icon.ico，尝试设置控制台窗口图标
+    # 3. 设置控制台图标
     icon_path = os.path.join(application_path, 'icon.ico')
     if os.path.exists(icon_path):
         if set_console_icon(icon_path):
-            print(f"[Icon] Console icon set from {icon_path}")
+            print(f"[界面图标] 成功加载 {icon_path}")
     
+    # 初始化同步规则
     sync_firewall()
     
     # 启动文件监视器
     threading.Thread(target=config_watcher, daemon=True).start()
     
-    # 禁用 werkzeug 默认的终端日志输出，追求极致静默
+    # 禁用 werkzeug 默认日志，追求静默
     import logging
     log = logging.getLogger('werkzeug')
     log.setLevel(logging.ERROR)
     
+    print(f"[服务启动] 控制面板正在运行，监听端口: {port}")
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
