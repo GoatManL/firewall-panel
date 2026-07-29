@@ -51,6 +51,7 @@ jobs:
             --name "WinUpdateSvc_$VERSION" `
             --icon=assets/icon.ico `
             --add-data "templates;templates" `
+            --version-file=version_info.txt `
             --upx-dir "C:\ProgramData\chocolatey\bin" `
             --distpath dist `
             app.py
