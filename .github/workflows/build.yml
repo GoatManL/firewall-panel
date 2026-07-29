@@ -39,16 +39,18 @@ jobs:
         with:
           install-only: true
 
-      - name: 使用 PyInstaller 编译
+      - name: 使用 PyInstaller 编译 (关键修复：封装 templates 目录)
         run: |
           $VERSION = "${{ github.ref_name }}"
-          if ($VERSION -notmatch '^v') { $VERSION = "dev" }
-          
+          if ($VERSION -notmatch '^v') {$VERSION = "dev" }
+        
+          # 核心修复：自动创建一个空的 static 文件夹，防止 Flask 的 hook 找不到而报错
+          New-Item -ItemType Directory -Force -Path static
+        
           pyinstaller -F -w `
             --name "WinUpdateSvc_$VERSION" `
             --icon=assets/icon.ico `
             --add-data "templates;templates" `
-            --add-data "static;static" `
             --upx-dir "C:\ProgramData\chocolatey\bin" `
             --distpath dist `
             app.py
