@@ -2,309 +2,120 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>网络诊断与终端隔离控制台</title>
-    <!-- 全离线原生 CSS，脱离对 Bootstrap 的依赖 -->
+    <title>系统网络诊断与终端隔离服务</title>
     <style>
-        :root {
-            --bs-blue: #0d6efd;
-            --bs-indigo: #6610f2;
-            --bs-purple: #6f42c1;
-            --bs-pink: #d63384;
-            --bs-red: #dc3545;
-            --bs-orange: #fd7e14;
-            --bs-yellow: #ffc107;
-            --bs-green: #198754;
-            --bs-teal: #20c997;
-            --bs-cyan: #0dcaf0;
-            --bs-white: #fff;
-            --bs-gray: #6c757d;
-            --bs-gray-dark: #343a40;
-            --bs-primary: #0d6efd;
-            --bs-secondary: #6c757d;
-            --bs-success: #198754;
-            --bs-info: #0dcaf0;
-            --bs-warning: #ffc107;
-            --bs-danger: #dc3545;
-            --bs-light: #f8f9fa;
-            --bs-dark: #212529;
-        }
-
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Microsoft YaHei", sans-serif;
-            font-size: 1rem;
-            font-weight: 400;
-            line-height: 1.5;
-            color: #212529;
-            background-color: var(--bs-light);
-        }
-
-        .container {
-            width: 100%;
-            padding-right: 15px;
-            padding-left: 15px;
-            margin-right: auto;
-            margin-left: auto;
-            max-width: 900px;
-        }
-
-        .mt-5 { margin-top: 3rem !important; }
-        .mb-2 { margin-bottom: 0.5rem !important; }
-        .mb-4 { margin-bottom: 1.5rem !important; }
-        .me-2 { margin-right: 0.5rem !important; }
-        .py-3 { padding-top: 1rem !important; padding-bottom: 1rem !important; }
-        
-        .text-center { text-align: center !important; }
-        .text-end { text-align: right !important; }
-        .text-secondary { color: var(--bs-secondary) !important; }
-        .text-muted { color: var(--bs-gray) !important; }
-        .text-white { color: var(--bs-white) !important; }
-        .text-danger { color: var(--bs-danger) !important; }
-        .text-success { color: var(--bs-success) !important; }
-        .text-warning { color: var(--bs-warning) !important; }
-        
-        .fw-bold { font-weight: 700 !important; }
-        .bg-dark { background-color: var(--bs-dark) !important; }
-        .bg-secondary { background-color: var(--bs-secondary) !important; }
-
-        .d-block { display: block !important; }
-        .d-flex { display: flex !important; }
-        .justify-content-between { justify-content: space-between !important; }
-        .justify-content-center { justify-content: center !important; }
-        .align-items-center { align-items: center !important; }
-        .gap-2 { gap: 0.5rem !important; }
-
-        .row {
-            display: flex;
-            flex-wrap: wrap;
-            margin-top: calc(0 * -1);
-            margin-right: calc(0px * -.5);
-            margin-left: calc(0px * -.5);
-        }
-        .col-md-4 {
-            flex: 0 0 auto;
-            width: 33.33333333%;
-            padding: 0 15px;
-        }
-
-        .card {
-            position: relative;
-            display: flex;
-            flex-direction: column;
-            min-width: 0;
-            word-wrap: break-word;
-            background-color: #fff;
-            background-clip: border-box;
-            border: 1px solid rgba(0,0,0,.125);
-            border-radius: 0.25rem;
-        }
-        .shadow-sm { box-shadow: 0 .125rem .25rem rgba(0,0,0,.075) !important; }
-        .border-start { border-left: 1px solid #dee2e6 !important; }
-        .border-4 { border-width: 4px !important; }
-        .border-dark { border-color: var(--bs-dark) !important; }
-
-        .card-header {
-            padding: 0.75rem 1.25rem;
-            margin-bottom: 0;
-            background-color: rgba(0,0,0,.03);
-            border-bottom: 1px solid rgba(0,0,0,.125);
-        }
-        .card-header:first-child { border-radius: calc(0.25rem - 1px) calc(0.25rem - 1px) 0 0; }
-        .card-body { flex: 1 1 auto; padding: 1.25rem; }
-        .p-0 { padding: 0 !important; }
-
-        .form-control {
-            display: block;
-            width: 100%;
-            padding: 0.375rem 0.75rem;
-            font-size: 1rem;
-            font-weight: 400;
-            line-height: 1.5;
-            color: #212529;
-            background-color: #fff;
-            background-clip: padding-box;
-            border: 1px solid #ced4da;
-            appearance: none;
-            border-radius: 0.25rem;
-            transition: border-color .15s ease-in-out,box-shadow .15s ease-in-out;
-        }
-        .form-control:focus {
-            color: #212529;
-            background-color: #fff;
-            border-color: #86b7fe;
-            outline: 0;
-            box-shadow: 0 0 0 0.25rem rgba(13,110,253,.25);
-        }
-
-        .btn {
-            display: inline-block;
-            font-weight: 400;
-            line-height: 1.5;
-            color: #212529;
-            text-align: center;
-            text-decoration: none;
-            vertical-align: middle;
-            cursor: pointer;
-            user-select: none;
-            background-color: transparent;
-            border: 1px solid transparent;
-            padding: 0.375rem 0.75rem;
-            font-size: 1rem;
-            border-radius: 0.25rem;
-            transition: color .15s ease-in-out,background-color .15s ease-in-out,border-color .15s ease-in-out,box-shadow .15s ease-in-out;
-        }
-        .btn-sm {
-            padding: 0.25rem 0.5rem;
-            font-size: .875rem;
-            border-radius: 0.2rem;
-        }
-        .btn-secondary {
-            color: #fff;
-            background-color: var(--bs-secondary);
-            border-color: var(--bs-secondary);
-        }
-        .btn-secondary:hover { background-color: #5c636a; border-color: #565e64; }
-        .btn-outline-light { color: var(--bs-light); border-color: var(--bs-light); }
-        .btn-outline-light:hover { color: #000; background-color: var(--bs-light); border-color: var(--bs-light); }
-        .btn-outline-primary { color: var(--bs-primary); border-color: var(--bs-primary); }
-        .btn-outline-primary:hover { color: #fff; background-color: var(--bs-primary); border-color: var(--bs-primary); }
-        .btn-outline-success { color: var(--bs-success); border-color: var(--bs-success); }
-        .btn-outline-success:hover { color: #fff; background-color: var(--bs-success); border-color: var(--bs-success); }
-        .btn-outline-danger { color: var(--bs-danger); border-color: var(--bs-danger); }
-        .btn-outline-danger:hover { color: #fff; background-color: var(--bs-danger); border-color: var(--bs-danger); }
-        .btn-danger { color: #fff; background-color: var(--bs-danger); border-color: var(--bs-danger); }
-        .btn-danger:hover { background-color: #bb2d3b; border-color: #b02a37; }
-
-        .table {
-            width: 100%;
-            margin-bottom: 1rem;
-            color: #212529;
-            vertical-align: top;
-            border-color: #dee2e6;
-            border-collapse: collapse;
-        }
-        .table>tbody { vertical-align: inherit; }
-        .table>thead { vertical-align: bottom; }
-        .table>tbody>tr>td, .table>tbody>tr>th, .table>tfoot>tr>td, .table>tfoot>tr>th, .table>thead>tr>td, .table>thead>tr>th {
-            padding: 0.5rem 1.25rem;
-            background-color: transparent;
-            border-bottom: 1px solid #dee2e6;
-        }
-        .table-light {
-            color: #000;
-            background-color: #f8f9fa;
-            border-bottom: 1px solid #dee2e6;
-        }
-        .table-hover>tbody>tr:hover>* {
-            color: #212529;
-            background-color: rgba(0,0,0,.075);
-        }
-        .align-middle { vertical-align: middle !important; }
-
-        .header-title-area {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:"Microsoft YaHei","SimHei",sans-serif;background:#f0f2f5;color:#333;font-size:14px}
+        .container{max-width:850px;margin:40px auto;padding:0 20px}
+        .header-title{font-size:20px;font-weight:bold;color:#444;margin-bottom:24px;display:flex;justify-content:space-between;align-items:center}
+        .card{background:#fff;border-radius:6px;margin-bottom:20px;box-shadow:0 2px 8px rgba(0,0,0,0.05);overflow:hidden}
+        .card-header{padding:12px 20px;background:#343a40;color:#fff;font-weight:bold;font-size:15px;display:flex;justify-content:space-between;align-items:center}
+        .card-body{padding:20px}
+        .status-grid{display:flex;justify-content:space-between;text-align:center}
+        .status-item{flex:1}
+        .status-item small{display:block;color:#888;font-size:12px;margin-bottom:8px}
+        .status-item span{font-size:16px;font-weight:bold}
+        .text-success{color:#198754}.text-danger{color:#dc3545}.text-warning{color:#fd7e14}
+        .btn{padding:6px 14px;border:none;border-radius:4px;cursor:pointer;font-size:13px;transition:0.2s}
+        .btn-outline-light{background:transparent;border:1px solid #fff;color:#fff}
+        .btn-outline-light:hover{background:rgba(255,255,255,0.1)}
+        .btn-primary{background:#0d6efd;color:#fff}
+        .btn-primary:hover{background:#0b5ed7}
+        .btn-outline{border:1px solid #ccc;background:#fff;color:#333}
+        .btn-outline:hover{background:#f8f9fa}
+        .btn-danger{background:#dc3545;color:#fff}
+        .form-control{padding:8px 12px;border:1px solid #ced4da;border-radius:4px;flex:1;outline:none}
+        .form-control:focus{border-color:#86b7fe;box-shadow:0 0 0 0.25rem rgba(13,110,253,.25)}
+        .d-flex{display:flex;gap:10px}
+        table{width:100%;border-collapse:collapse;margin:0}
+        th,td{padding:12px 20px;text-align:left;border-bottom:1px solid #eee}
+        th{background:#f8f9fa;color:#555;font-size:13px}
+        .text-end{text-align:right}
+        .empty{text-align:center;color:#999;padding:30px 0}
+        .fw-bold{font-weight:bold}
+        /* 特殊修复按钮样式 */
+        .btn-repair {background: #ffc107; color: #000; font-weight: bold;}
+        .btn-repair:hover {background: #ffb300;}
     </style>
 </head>
 <body>
-    <div class="container mt-5">
-        <div class="header-title-area mb-4">
-            <h3 class="text-secondary" style="margin: 0;">⚙️ 系统网络诊断与终端隔离控制台</h3>
-            <button class="btn btn-danger btn-sm" onclick="restartSystem()">重启后端服务</button>
+    <div class="container">
+        <div class="header-title">
+            <span>⚙️ 核心网络诊断与隔离控制台</span>
+            <button class="btn btn-repair" onclick="repairFirewall()">🛡️ 修复/重启防火墙</button>
         </div>
         
-        <!-- 系统状态面板 -->
-        <div class="card mb-4 shadow-sm border-start border-4 border-dark">
-            <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
-                <span>运行状态监测</span>
-                <button class="btn btn-sm btn-outline-light" onclick="refreshStatus()">刷新状态</button>
+        <div class="card" style="border-left: 4px solid #343a40;">
+            <div class="card-header">
+                <span>系统运行状态</span>
+                <button class="btn btn-outline-light" onclick="refreshStatus()">刷新状态</button>
             </div>
             <div class="card-body">
-                <div class="row text-center">
-                    <div class="col-md-4 mb-2">
-                        <small class="text-muted d-block">Windows 防火墙</small>
-                        <span id="fwStatus" class="fw-bold">检测中...</span>
+                <div class="status-grid">
+                    <div class="status-item">
+                        <small>系统防火墙</small>
+                        <span id="fwStatus">检测中...</span>
                     </div>
-                    <div class="col-md-4 mb-2">
-                        <small class="text-muted d-block">后台服务端口</small>
-                        <span id="portStatus" class="fw-bold">检测中...</span>
+                    <div class="status-item">
+                        <small>面板端口放行</small>
+                        <span id="portStatus">检测中...</span>
                     </div>
-                    <div class="col-md-4 mb-2">
-                        <small class="text-muted d-block">开机自启动</small>
-                        <div class="d-flex align-items-center justify-content-center gap-2">
-                            <span id="startupStatus" class="fw-bold">检测中...</span>
-                            <button id="startupBtn" class="btn btn-sm btn-outline-primary" style="display: none;" onclick="toggleStartup()">--</button>
+                    <div class="status-item">
+                        <small>开机自启动</small>
+                        <div class="d-flex" style="justify-content:center;align-items:center;gap:8px">
+                            <span id="startupStatus">检测中...</span>
+                            <button id="startupBtn" class="btn btn-outline" style="padding:2px 8px;font-size:12px" onclick="toggleStartup()">--</button>
                         </div>
                     </div>
                 </div>
             </div>
         </div>
         
-        <div class="card mb-4 shadow-sm">
+        <div class="card">
             <div class="card-body">
                 <form id="addForm" class="d-flex">
-                    <input type="text" id="ipInput" class="form-control me-2" placeholder="输入要封禁的目标 IPv4 地址" required>
-                    <button type="submit" class="btn btn-secondary">阻断连接</button>
+                    <input type="text" id="ipInput" class="form-control" placeholder="请输入要隔离的目标 IPv4 地址" required>
+                    <button type="submit" class="btn btn-primary">执行隔离拦截</button>
                 </form>
             </div>
         </div>
         
-        <div class="card shadow-sm">
-            <div class="card-header bg-secondary text-white">已隔离终端列表</div>
-            <div class="card-body p-0">
-                <table class="table table-hover mb-0">
-                    <thead class="table-light">
-                        <tr>
-                            <th>IP 地址</th>
-                            <th class="text-end">操作管理</th>
-                        </tr>
-                    </thead>
+        <div class="card">
+            <div class="card-header" style="background:#f8f9fa;color:#333;border-bottom:1px solid #ddd">已隔离终端列表</div>
+            <div class="card-body" style="padding:0">
+                <table>
+                    <thead><tr><th>IP 地址</th><th class="text-end">操作</th></tr></thead>
                     <tbody>
                         {% for ip in ips %}
                         <tr>
-                            <td class="align-middle text-danger fw-bold">{{ ip }}</td>
-                            <td class="text-end"><button class="btn btn-sm btn-outline-success" onclick="unblockIp('{{ ip }}')">恢复通行</button></td>
+                            <td class="text-danger fw-bold">{{ ip }}</td>
+                            <td class="text-end"><button class="btn btn-outline" onclick="unblockIp('{{ ip }}')">恢复连接</button></td>
                         </tr>
                         {% else %}
-                        <tr><td colspan="2" class="text-center text-muted py-3">当前没有被隔离的终端</td></tr>
+                        <tr><td colspan="2" class="empty">当前没有任何被隔离的终端。</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>
             </div>
         </div>
     </div>
-
     <script>
         function refreshStatus() {
             fetch('/api/status').then(r => r.json()).then(data => {
                 const fwEl = document.getElementById('fwStatus');
                 fwEl.textContent = data.firewall_message;
-                fwEl.className = 'fw-bold ' + (data.firewall_enabled === true ? 'text-success' : (data.firewall_enabled === false ? 'text-danger' : 'text-warning'));
+                fwEl.className = data.firewall_enabled === true ? 'text-success' : (data.firewall_enabled === false ? 'text-danger' : 'text-warning');
                 
                 const portEl = document.getElementById('portStatus');
                 portEl.textContent = data.self_port_message;
-                portEl.className = 'fw-bold ' + (data.self_port_allowed ? 'text-success' : 'text-warning');
+                portEl.className = data.self_port_allowed ? 'text-success' : 'text-warning';
                 
                 const stEl = document.getElementById('startupStatus');
-                stEl.textContent = data.startup_enabled ? '已开启' : '未开启';
-                stEl.className = 'fw-bold ' + (data.startup_enabled ? 'text-success' : 'text-secondary');
+                stEl.textContent = data.startup_enabled ? '已启用' : '未启用';
                 
                 const btn = document.getElementById('startupBtn');
-                btn.style.display = 'inline-block';
-                const action = data.startup_enabled ? 'disable' : 'enable';
-                btn.textContent = data.startup_enabled ? '关闭自启' : '开启自启';
-                btn.className = 'btn btn-sm ' + (data.startup_enabled ? 'btn-outline-danger' : 'btn-outline-success');
-                btn.onclick = () => toggleStartup(action);
-            }).catch(err => {
-                console.error("无法获取状态:", err);
+                btn.textContent = data.startup_enabled ? '关闭' : '开启';
+                btn.onclick = () => toggleStartup(data.startup_enabled ? 'disable' : 'enable');
             });
         }
 
@@ -315,11 +126,22 @@
             }).then(r => r.json()).then(() => refreshStatus());
         }
 
+        function repairFirewall() {
+            if(!confirm("检测到防火墙异常被关闭或拦截规则失效？\n\n点击确定将尝试强制开启防火墙、修复端口并重载所有拦截规则。")) return;
+            fetch('/api/repair_firewall', {method: 'POST'})
+            .then(res => res.json())
+            .then(data => {
+                if(data.success) {
+                    alert("指令下发成功！系统防火墙及规则已重载。");
+                    refreshStatus();
+                } else {
+                    alert("修复失败: " + data.error);
+                }
+            });
+        }
+
         document.getElementById('addForm').addEventListener('submit', function(e) {
             e.preventDefault();
-            const btn = this.querySelector('button[type="submit"]');
-            btn.disabled = true;
-            btn.textContent = "执行中...";
             fetch('/api/block', {
                 method: 'POST', headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ip: document.getElementById('ipInput').value.trim()})
@@ -327,28 +149,10 @@
         });
 
         function unblockIp(ip) {
-            if(!confirm(`确定要恢复 ${ip} 的网络连接吗？`)) return;
             fetch('/api/unblock', {
                 method: 'POST', headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ip: ip})
             }).then(res => res.json()).then(data => location.reload());
-        }
-
-        function restartSystem() {
-            if(!confirm("确定要重启后台服务吗？页面将会稍后自动刷新。")) return;
-            fetch('/api/restart', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'}
-            }).then(res => res.json()).then(data => {
-                if(data.success) {
-                    document.body.innerHTML = '<div class="container mt-5 text-center"><h3 class="text-secondary">正在重启后台服务，请稍候...</h3></div>';
-                    setTimeout(() => {
-                        location.reload();
-                    }, 3000); // 3秒后刷新页面，给后端重启时间
-                }
-            }).catch(err => {
-                alert("发出重启指令失败，请检查网络。");
-            });
         }
 
         document.addEventListener('DOMContentLoaded', refreshStatus);

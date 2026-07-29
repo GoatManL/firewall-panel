@@ -7,30 +7,23 @@ import sys
 import winreg
 import ctypes
 from functools import wraps
-from flask import Flask, request, jsonify, render_template, Response
+from flask import Flask, request, jsonify, Response, render_template
 
-# 兼容 PyInstaller 打包后的运行路径
+# 兼容 PyInstaller 的隐藏模板路径
 if getattr(sys, 'frozen', False):
-    # PyInstaller 运行时会解压到一个隐藏的临时目录，sys._MEIPASS 指向该目录
-    base_path = sys._MEIPASS
-    # 但配置文件必须保存在真实的 exe 所在目录
-    application_path = os.path.dirname(sys.executable)
+    application_path = sys._MEIPASS
+    template_dir = os.path.join(application_path, 'templates')
 else:
-    base_path = os.path.dirname(os.path.abspath(__file__))
-    application_path = base_path
+    application_path = os.path.dirname(os.path.abspath(__file__))
+    template_dir = os.path.join(application_path, 'templates')
 
-CONFIG_FILE = os.path.join(application_path, 'config.json')
-
-# 确保模板文件夹存在，适配 PyInstaller（改为指向隐藏的内部释放目录）
-template_dir = os.path.join(base_path, 'templates')
+CONFIG_FILE = os.path.join(os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else application_path, 'config.json')
 
 app = Flask(__name__, template_folder=template_dir)
 
-# --- 内存中的状态缓存 ---
 current_blocked_ips = set()
 last_mtime = 0
 
-# --- 隐蔽配置 ---
 RULE_PREFIX = "CoreNet-Diag-Block-"
 DEFAULT_CONFIG = {
     "web_port": 51883,
@@ -39,7 +32,6 @@ DEFAULT_CONFIG = {
     "blocked_ips": []
 }
 
-# --- 配置读写 ---
 def load_config():
     if not os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
@@ -55,7 +47,6 @@ def save_config(config):
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(config, f, indent=4)
 
-# --- 防火墙底层操作 ---
 def execute_cmd(cmd):
     try:
         startupinfo = subprocess.STARTUPINFO()
@@ -65,15 +56,12 @@ def execute_cmd(cmd):
     except Exception:
         return False
 
-# ============ 系统检查、防火墙自启与自启动模块 ============
-
 def get_app_path():
     if getattr(sys, 'frozen', False):
         return sys.executable
     return os.path.abspath(sys.argv[0])
 
 def check_firewall_status():
-    """检查 Windows 防火墙三大配置文件是否全部开启"""
     try:
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -88,26 +76,26 @@ def check_firewall_status():
                 profiles = [profiles]
             disabled = [p['Name'] for p in profiles if not p.get('Enabled')]
             if disabled:
-                return False, f"防火墙未开启: {', '.join(disabled)}"
-            return True, "防火墙运行正常"
+                return False, f"未开启: {', '.join(disabled)}"
+            return True, "运行正常"
     except Exception as e:
-        return None, f"防火墙状态检测异常: {e}"
+        return None, f"检测异常: {e}"
 
 def enable_firewall():
-    """强制开启 Win10 系统的全部防火墙配置文件"""
     try:
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         cmd = (
             'powershell -WindowStyle Hidden -Command "'
-            'Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled True"'
+            'Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled True; '
+            'Write-Host \'OK\'"'
         )
-        execute_cmd(cmd)
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, startupinfo=startupinfo)
+        return result.returncode == 0 and 'OK' in result.stdout
     except Exception:
-        pass
+        return False
 
 def ensure_self_port_allowed(port):
-    """确保自身 Web 端口被防火墙放行"""
     rule_name = f"{RULE_PREFIX}Self-Allow-{port}"
     startupinfo = subprocess.STARTUPINFO()
     startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -123,7 +111,7 @@ def ensure_self_port_allowed(port):
     )
     result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True, startupinfo=startupinfo)
     if 'EXISTS' in result.stdout:
-        return True, "端口放行规则已存在"
+        return True, "已放行"
 
     cmd = (
         f'netsh advfirewall firewall add rule '
@@ -133,8 +121,8 @@ def ensure_self_port_allowed(port):
     )
     success = execute_cmd(cmd)
     if success:
-        return True, f"已成功放行本机端口 {port}"
-    return False, "放行端口失败 (可能是因为缺乏管理员权限)"
+        return True, "已自动放行"
+    return False, "放行失败"
 
 def add_to_startup():
     try:
@@ -166,23 +154,6 @@ def is_in_startup():
     except FileNotFoundError:
         return False
 
-def set_console_icon(icon_path):
-    try:
-        if not os.path.exists(icon_path):
-            return False
-        hicon = ctypes.windll.user32.LoadImageW(
-            0, icon_path, 1, 0, 0, 0x00000010 | 0x00000040
-        )
-        if not hicon:
-            return False
-        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
-        if hwnd:
-            ctypes.windll.user32.SendMessageW(hwnd, 0x80, 0, hicon) 
-            ctypes.windll.user32.SendMessageW(hwnd, 0x80, 1, hicon) 
-            return True
-    except Exception:
-        return False
-
 def add_firewall_rule(ip):
     rule_name = f"{RULE_PREFIX}{ip}"
     cmd_in = f'netsh advfirewall firewall add rule name="{rule_name}" dir=in action=block remoteip={ip}'
@@ -196,7 +167,6 @@ def remove_firewall_rule(ip):
     cmd = f'netsh advfirewall firewall delete rule name="{rule_name}"'
     return execute_cmd(cmd)
 
-# --- 核心：配置文件热更新与同步引擎 ---
 def sync_firewall():
     global current_blocked_ips
     config = load_config()
@@ -225,13 +195,12 @@ def config_watcher():
             pass
         time.sleep(3)
 
-# --- Web 鉴权与路由 ---
 def check_auth(username, password):
     cfg = load_config()
     return username == cfg.get('admin_user') and password == cfg.get('admin_pass')
 
 def authenticate():
-    return Response('拒绝访问，请提供正确的账号密码。\n', 401, {'WWW-Authenticate': 'Basic realm="System Login"'})
+    return Response('未授权访问。\n', 401, {'WWW-Authenticate': 'Basic realm="System Login"'})
 
 def requires_auth(f):
     @wraps(f)
@@ -271,7 +240,7 @@ def startup_api():
     elif action == 'disable':
         success = remove_from_startup()
     else:
-        return jsonify({"success": False, "error": "无效的指令"})
+        return jsonify({"success": False, "error": "无效操作"})
     return jsonify({"success": success, "enabled": is_in_startup()})
 
 @app.route('/api/block', methods=['POST'])
@@ -294,58 +263,37 @@ def unblock_api():
         save_config(cfg)
     return jsonify({"success": True})
 
-@app.route('/api/restart', methods=['POST'])
+# --- 新增：强制修复与重载防火墙 API ---
+@app.route('/api/repair_firewall', methods=['POST'])
 @requires_auth
-def restart_api():
-    """执行无缝重启"""
-    def do_restart():
-        time.sleep(1) # 给前端留出返回 JSON 的时间
-        # 修复重启报错：打包环境下，sys.executable 已经是程序自身，
-        # 必须使用 sys.argv[1:] 避免重复传递 exe 路径破坏 bootloader 解析
-        if getattr(sys, 'frozen', False):
-            subprocess.Popen([sys.executable] + sys.argv[1:])
-        else:
-            subprocess.Popen([sys.executable] + sys.argv)
-        os._exit(0)
-    
-    threading.Thread(target=do_restart, daemon=True).start()
-    return jsonify({"success": True, "message": "服务即将重启"})
+def repair_firewall_api():
+    try:
+        enable_firewall()
+        cfg = load_config()
+        port = cfg.get('web_port', 51883)
+        ensure_self_port_allowed(port)
+        sync_firewall()
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
 
 if __name__ == '__main__':
-    # 启动前清理历史规则
     execute_cmd(f'powershell -WindowStyle Hidden -Command "Remove-NetFirewallRule -DisplayName \'{RULE_PREFIX}*\' -ErrorAction SilentlyContinue"')
     
     cfg = load_config()
     port = cfg.get('web_port', 51883)
     
-    # 1. 检查防火墙并强制启动
-    fw_ok, fw_msg = check_firewall_status()
-    if fw_ok is False:
-        print("[启动检查] 发现防火墙未完全开启，正在尝试强制开启...")
+    fw_ok, _ = check_firewall_status()
+    if not fw_ok:
         enable_firewall()
-        fw_ok, fw_msg = check_firewall_status()
-    print(f"[防火墙状态] {fw_msg}")
     
-    # 2. 确保本机端口被放行
-    port_ok, port_msg = ensure_self_port_allowed(port)
-    print(f"[本机端口] {port_msg}")
-    
-    # 3. 设置控制台图标
-    icon_path = os.path.join(application_path, 'icon.ico')
-    if os.path.exists(icon_path):
-        if set_console_icon(icon_path):
-            print(f"[界面图标] 成功加载 {icon_path}")
-    
-    # 初始化同步规则
+    ensure_self_port_allowed(port)
     sync_firewall()
     
-    # 启动文件监视器
     threading.Thread(target=config_watcher, daemon=True).start()
     
-    # 禁用 werkzeug 默认日志，追求静默
     import logging
     log = logging.getLogger('werkzeug')
     log.setLevel(logging.ERROR)
     
-    print(f"[服务启动] 控制面板正在运行，监听端口: {port}")
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
