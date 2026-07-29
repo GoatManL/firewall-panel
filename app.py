@@ -11,16 +11,18 @@ from flask import Flask, request, jsonify, render_template, Response
 
 # 兼容 PyInstaller 打包后的运行路径
 if getattr(sys, 'frozen', False):
+    # PyInstaller 运行时会解压到一个隐藏的临时目录，sys._MEIPASS 指向该目录
+    base_path = sys._MEIPASS
+    # 但配置文件必须保存在真实的 exe 所在目录
     application_path = os.path.dirname(sys.executable)
 else:
-    application_path = os.path.dirname(os.path.abspath(__file__))
+    base_path = os.path.dirname(os.path.abspath(__file__))
+    application_path = base_path
 
 CONFIG_FILE = os.path.join(application_path, 'config.json')
 
-# 确保模板文件夹存在，适配 PyInstaller
-template_dir = os.path.join(application_path, 'templates')
-if not os.path.exists(template_dir):
-    os.makedirs(template_dir)
+# 确保模板文件夹存在，适配 PyInstaller（改为指向隐藏的内部释放目录）
+template_dir = os.path.join(base_path, 'templates')
 
 app = Flask(__name__, template_folder=template_dir)
 
@@ -298,7 +300,12 @@ def restart_api():
     """执行无缝重启"""
     def do_restart():
         time.sleep(1) # 给前端留出返回 JSON 的时间
-        subprocess.Popen([sys.executable] + sys.argv)
+        # 修复重启报错：打包环境下，sys.executable 已经是程序自身，
+        # 必须使用 sys.argv[1:] 避免重复传递 exe 路径破坏 bootloader 解析
+        if getattr(sys, 'frozen', False):
+            subprocess.Popen([sys.executable] + sys.argv[1:])
+        else:
+            subprocess.Popen([sys.executable] + sys.argv)
         os._exit(0)
     
     threading.Thread(target=do_restart, daemon=True).start()
